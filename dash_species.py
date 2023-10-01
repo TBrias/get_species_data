@@ -13,7 +13,7 @@ from dash.dependencies import Input, Output, State
 # Chargez vos données CSV
 cwd = os.getcwd()
 chemin=os.path.join(cwd, "output")
-csv_files = [f for f in os.listdir(chemin) if f.startswith('out_all_2023-09-')]
+csv_files = [f for f in os.listdir(chemin) if f.startswith('out_all_')]
 
 map_resources=os.path.join(cwd, "resources", "departements.geojson")
 
@@ -23,7 +23,7 @@ for csv in csv_files:
     df = pd.read_csv(os.path.join(chemin, csv))
     dfs.append(df)
 df = pd.concat(dfs, ignore_index=True)
-df = df.dropna(axis=0)
+
 print(datetime.now())
 
 # Chargez les données géospatiales pour les départements de la France au format GeoJSON
@@ -40,16 +40,28 @@ dep_options = sorted([{'label': dep, 'value': dep} for dep in df['dep'].unique()
 species_name_options =  sorted([{'label': species_name, 'value': species_name} for species_name in df['species_name'].unique()], key=lambda x: x['label'])
 species_name_top = df.groupby(['species_name'])['birds_count'].sum().sort_values(ascending=False).head(10)
 
+# Créé la liste des dates possibles
+df_range_date=sorted(df['date'].unique())
+
 app.layout = html.Div([
     html.Div([
-        dcc.RangeSlider(
-            id='date-range-slider',
-            marks={i: {'label': date} for i, date in enumerate(sorted(df['date'].unique()))},
-            min=0,
-            max=len(df['date'].unique()) - 1,
-            step=1,
-            value=[0, len(df['date'].unique()) - 1],  # Plage temporelle complète par défaut
+        html.H1(['Ornithologie Normandie']),
+        html.Div(['Selectionner les espèces, départements et un pas de temps pour visualiser les données']),
+        html.Br(),
+        html.Label("Selectionner la période de temps", className='label-title'),
+        html.Br(),
+        dcc.DatePickerRange(
+            id='date-picker-range',
+            min_date_allowed=df_range_date[0],
+            max_date_allowed=df_range_date[len(df_range_date)-1],
+            initial_visible_month=df_range_date[0],  # Afficher le mois initial
+            start_date=df_range_date[0],  # Valeur par défaut du début
+            end_date=df_range_date[len(df_range_date)-1],  # Valeur par défaut de la fin
         ),
+        html.Br(),
+        html.Br(),
+        html.Label("Selectionner les départements", className='label-title'),
+        html.Br(),
         dcc.Dropdown(
             id='dep-dropdown',
             options=dep_options,
@@ -57,23 +69,33 @@ app.layout = html.Div([
             value=list(df['dep'].unique()),  # Tous les départements sélectionnés par défaut
             placeholder="Sélectionnez les départements",
         ),
+        html.Br(),
+        html.Label("Selectionner une ou toutes les espèces", className='label-title'),
+        html.Br(),
         html.Button("Sélectionner toutes les espèces", id="select-all"),
         dcc.Store(id='select-all-state', data=0),
+        html.Br(),
         dcc.Dropdown(
             id='species-name-dropdown',
             options=species_name_options,
             multi=False,
-            placeholder="Sélectionnez les espèces",
+            placeholder="Sélectionner une espèce",
         )
-        ], style={'position': 'sticky', 'left': 100,'top': 20, 'width': '60%', 'zIndex': 1000, 'background-color':'white', 'box-shadow': 'inset 2px 2px 10px rgba(255,255,255,.1), inset -5px -8px 8px rgba(0,0,0,.2)'}),
+        ],
+        className='left-column'),
     html.Div([
-        dcc.Graph(id='map-fig', style={'height': '80vh'}),  # Hauteur de la carte plus grande
-        ], style={'position': 'float','margin-top': '15px'}),
-    html.Div([
-        dcc.Graph(id='graph-fig'),
-        dcc.Graph(id='batton-fig'),
-        dcc.Graph(id='pie-fig')
-        ], style={'position': 'float','margin-top': '5px', 'width': '60%', 'margin-left': 'auto', 'margin-right': 'auto'})
+        html.Div([
+            dcc.Graph(id='map-fig', style={'height': '80vh'}),  # Hauteur de la carte plus grande
+            ]),
+        html.Div([
+            html.Div([
+            dcc.Graph(id='graph-fig')], className='small-left-column'),
+            html.Div([
+            dcc.Graph(id='batton-fig')], className='small-right-column'),
+            dcc.Graph(id='pie-fig')
+            ]) 
+        ], 
+        className='right-column')
 ])
 
 @app.callback(
@@ -83,15 +105,15 @@ app.layout = html.Div([
      Output('batton-fig', 'figure')],
     [Input('dep-dropdown', 'value'),
      Input('species-name-dropdown', 'value'),
-     Input('date-range-slider', 'value'),
+     Input('date-picker-range', 'start_date'),
+     Input('date-picker-range', 'end_date'),
      Input("select-all", "n_clicks")
     ],
     State('species-name-dropdown', 'options'),
     State('species-name-dropdown', 'value'),
     State('select-all-state', 'data') 
 )
-def update_map(selected_deps, selected_species, date_range, n_clicks, species_name_options, selected_species_values, select_all_state):
-    print("****** ***** ****** *********** ********* ********* ********** *****")
+def update_map(selected_deps, selected_species, start_date, end_date, n_clicks, species_name_options, selected_species_values, select_all_state):
     changed_id = [p['prop_id'] for p in dash.callback_context.triggered][0]
     if 'select-all' in changed_id:
         # Si le bouton "Select All" a été cliqué, basculez l'état du Store
@@ -101,15 +123,13 @@ def update_map(selected_deps, selected_species, date_range, n_clicks, species_na
     if select_all_state == 1:
         selected_species=list(df['species_name'].unique())
         selected_species_values = [species['value'] for species in species_name_options]
-        
-    start_date = sorted(df['date'].unique())[date_range[0]]
-    end_date = sorted(df['date'].unique())[date_range[1]]
 
     # Filtre par départements et dates
     filtered_df = df[
         (df['dep'].isin(selected_deps)) & 
         (df['date'] >= start_date) & (df['date'] <= end_date)]
     filtered_df['birds_count'] = filtered_df['birds_count'].astype(int)
+
     # Top 10 des espèces par département/date
     species_name_top=filtered_df.groupby(['species_name'])['birds_count'].sum().sort_values(ascending=False).head(10)
 
@@ -125,15 +145,10 @@ def update_map(selected_deps, selected_species, date_range, n_clicks, species_na
     ]
 
     # Calculer la taille des points en fonction de 'birds_count'
-    min_marker_size = 10
-    max_marker_size = 100
-    print(filtered_df['birds_count'].min())
-    print(filtered_df['birds_count'].max())
     marker_size_range = (filtered_df['birds_count'].min(), filtered_df['birds_count'].max())
     filtered_df['marker_size'] = filtered_df['birds_count'].apply(
-        lambda x: min_marker_size + (max_marker_size - min_marker_size) * (math.exp2(math.log(x+1))*5 - marker_size_range[0]) / (marker_size_range[1] - marker_size_range[0])
+        lambda x: math.sqrt(x) + (3 * math.log(x) + 1) + 20/marker_size_range[1]
     )
-    print(filtered_df)
 
     # Créer une carte de contours des départements de la France
     map_fig = go.Figure(go.Choroplethmapbox(
@@ -167,8 +182,10 @@ def update_map(selected_deps, selected_species, date_range, n_clicks, species_na
 
     # Personnalisez la mise en page de la carte
     map_fig.update_layout(
+        title='Distribution des espèces',
         mapbox_style="carto-positron",
-        mapbox_zoom=6,
+        margin=dict(l=30, r=30, t=50, b=30),
+        mapbox_zoom=6.5,
         mapbox_center={"lat": 49.103354, "lon": 0},
     )
 
@@ -230,7 +247,6 @@ def update_map(selected_deps, selected_species, date_range, n_clicks, species_na
     Input("select-all", "n_clicks"))
 def reset_species(n_clicks):
     return None
-
 
 if __name__ == '__main__':
     app.run_server(debug=True)
